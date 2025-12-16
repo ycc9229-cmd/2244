@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="zh-TW" class="h-full">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>數獨遊戲</title>
+  <script src="/_sdk/element_sdk.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      box-sizing: border-box;
+    }
+    
+    .sudoku-cell {
+      transition: all 0.2s ease;
+    }
+    
+    .sudoku-cell:hover {
+      transform: scale(1.05);
+    }
+    
+    .sudoku-cell.selected {
+      box-shadow: 0 0 0 3px #3b82f6;
+    }
+    
+    .sudoku-cell.error {
+      animation: shake 0.3s ease;
+    }
+    
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-5px); }
+      75% { transform: translateX(5px); }
+    }
+    
+    .success-animation {
+      animation: celebrate 0.6s ease;
+    }
+    
+    @keyframes celebrate {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.1); }
+    }
+  </style>
+  <style>@view-transition { navigation: auto; }</style>
+  <script src="/_sdk/data_sdk.js" type="text/javascript"></script>
+ </head>
+ <body class="h-full">
+  <div id="app" class="w-full h-full overflow-auto" style="background: #f0f9ff;">
+   <div class="min-h-full flex flex-col items-center justify-center p-4 sm:p-6 md:p-8">
+    <div class="w-full max-w-2xl" style="background: #ffffff; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); padding: 32px;"><!-- Header -->
+     <div class="text-center mb-8">
+      <h1 id="game-title" class="text-4xl font-bold mb-2" style="color: #1e40af;">數獨遊戲</h1>
+      <p class="text-lg" style="color: #64748b;">挑戰你的邏輯思維</p>
+     </div><!-- Controls -->
+     <div class="flex flex-wrap gap-3 justify-center mb-6">
+      <div class="flex gap-2"><label for="difficulty" class="self-center font-semibold" style="color: #475569;">難度：</label> <select id="difficulty" class="px-4 py-2 rounded-lg font-semibold transition-all" style="background: #eff6ff; color: #1e40af; border: 2px solid #3b82f6; cursor: pointer;"> <option value="easy">簡單</option> <option value="medium" selected>中等</option> <option value="hard">困難</option> </select>
+      </div><button id="new-game-btn" class="px-6 py-2 rounded-lg font-semibold transition-all" style="background: #3b82f6; color: #ffffff; border: none; cursor: pointer;"> 新遊戲 </button> <button id="check-btn" class="px-6 py-2 rounded-lg font-semibold transition-all" style="background: #10b981; color: #ffffff; border: none; cursor: pointer;"> 檢查答案 </button> <button id="hint-btn" class="px-6 py-2 rounded-lg font-semibold transition-all" style="background: #f59e0b; color: #ffffff; border: none; cursor: pointer;"> 提示 </button>
+     </div><!-- Timer and Mistakes -->
+     <div class="flex justify-between mb-4 px-2">
+      <div class="font-semibold" style="color: #475569;"><span>時間：</span> <span id="timer" style="color: #1e40af;">00:00</span>
+      </div>
+      <div class="font-semibold" style="color: #475569;"><span>錯誤：</span> <span id="mistakes" style="color: #ef4444;">0</span>
+      </div>
+     </div><!-- Sudoku Grid -->
+     <div id="sudoku-grid" class="mx-auto" style="display: inline-grid; grid-template-columns: repeat(9, 1fr); gap: 0; border: 3px solid #1e40af; border-radius: 8px; overflow: hidden; background: #1e40af;"></div><!-- Message -->
+     <div id="message" class="text-center mt-6 font-semibold text-lg" style="color: #10b981; min-height: 28px;"></div>
+    </div>
+   </div>
+  </div>
+  <script>
+    const defaultConfig = {
+      game_title: "數獨遊戲",
+      new_game_button: "新遊戲",
+      check_button: "檢查答案",
+      hint_button: "提示"
+    };
+    
+    let currentPuzzle = [];
+    let solution = [];
+    let userGrid = [];
+    let selectedCell = null;
+    let timerInterval = null;
+    let seconds = 0;
+    let mistakes = 0;
+    
+    // Sudoku Generator
+    function generateSudoku(difficulty) {
+      const grid = Array(9).fill(null).map(() => Array(9).fill(0));
+      
+      // Fill diagonal 3x3 boxes
+      for (let box = 0; box < 9; box += 3) {
+        fillBox(grid, box, box);
+      }
+      
+      // Solve the rest
+      solveSudoku(grid);
+      
+      const solvedGrid = grid.map(row => [...row]);
+      
+      // Remove numbers based on difficulty
+      const cellsToRemove = {
+        easy: 35,
+        medium: 45,
+        hard: 55
+      }[difficulty];
+      
+      const positions = [];
+      for (let i = 0; i < 9; i++) {
+        for (let j = 0; j < 9; j++) {
+          positions.push([i, j]);
+        }
+      }
+      
+      // Shuffle and remove
+      for (let i = positions.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [positions[i], positions[j]] = [positions[j], positions[i]];
+      }
+      
+      for (let i = 0; i < cellsToRemove; i++) {
+        const [row, col] = positions[i];
+        grid[row][col] = 0;
+      }
+      
+      return { puzzle: grid, solution: solvedGrid };
+    }
+    
+    function fillBox(grid, row, col) {
+      const numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+      for (let i = numbers.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
+      }
+      
+      let idx = 0;
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          grid[row + i][col + j] = numbers[idx++];
+        }
+      }
+    }
+    
+    function isValid(grid, row, col, num) {
+      for (let x = 0; x < 9; x++) {
+        if (grid[row][x] === num || grid[x][col] === num) {
+          return false;
+        }
+      }
+      
+      const startRow = row - (row % 3);
+      const startCol = col - (col % 3);
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          if (grid[i + startRow][j + startCol] === num) {
+            return false;
+          }
+        }
+      }
+      
+      return true;
+    }
+    
+    function solveSudoku(grid) {
+      for (let row = 0; row < 9; row++) {
+        for (let col = 0; col < 9; col++) {
+          if (grid[row][col] === 0) {
+            for (let num = 1; num <= 9; num++) {
+              if (isValid(grid, row, col, num)) {
+                grid[row][col] = num;
+                if (solveSudoku(grid)) {
+                  return true;
+                }
+                grid[row][col] = 0;
+              }
+            }
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+    
+    function renderGrid() {
+      const gridElement = document.getElementById('sudoku-grid');
+      gridElement.innerHTML = '';
+      
+      for (let i = 0; i < 9; i++) {
+        for (let j = 0; j < 9; j++) {
+          const cell = document.createElement('div');
+          cell.className = 'sudoku-cell';
+          cell.style.cssText = `
+            aspect-ratio: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            font-weight: 600;
+            cursor: pointer;
+            background: ${(Math.floor(i/3) + Math.floor(j/3)) % 2 === 0 ? '#ffffff' : '#f0f9ff'};
+            border-right: ${j % 3 === 2 && j !== 8 ? '3px' : '1px'} solid #cbd5e1;
+            border-bottom: ${i % 3 === 2 && i !== 8 ? '3px' : '1px'} solid #cbd5e1;
+          `;
+          
+          if (currentPuzzle[i][j] !== 0) {
+            cell.textContent = currentPuzzle[i][j];
+            cell.style.color = '#1e40af';
+            cell.style.fontWeight = '700';
+            cell.style.cursor = 'default';
+          } else if (userGrid[i][j] !== 0) {
+            cell.textContent = userGrid[i][j];
+            cell.style.color = '#3b82f6';
+          }
+          
+          cell.addEventListener('click', () => selectCell(i, j, cell));
+          gridElement.appendChild(cell);
+        }
+      }
+    }
+    
+    function selectCell(row, col, cellElement) {
+      if (currentPuzzle[row][col] !== 0) return;
+      
+      document.querySelectorAll('.sudoku-cell').forEach(c => c.classList.remove('selected'));
+      cellElement.classList.add('selected');
+      selectedCell = { row, col, element: cellElement };
+    }
+    
+    function startNewGame() {
+      const difficulty = document.getElementById('difficulty').value;
+      const { puzzle, solution: sol } = generateSudoku(difficulty);
+      currentPuzzle = puzzle;
+      solution = sol;
+      userGrid = puzzle.map(row => [...row]);
+      selectedCell = null;
+      mistakes = 0;
+      seconds = 0;
+      
+      document.getElementById('mistakes').textContent = '0';
+      document.getElementById('message').textContent = '';
+      
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        seconds++;
+        const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+        const secs = (seconds % 60).toString().padStart(2, '0');
+        document.getElementById('timer').textContent = `${mins}:${secs}`;
+      }, 1000);
+      
+      renderGrid();
+    }
+    
+    function checkSolution() {
+      let correct = true;
+      for (let i = 0; i < 9; i++) {
+        for (let j = 0; j < 9; j++) {
+          if (userGrid[i][j] !== solution[i][j]) {
+            correct = false;
+            break;
+          }
+        }
+        if (!correct) break;
+      }
+      
+      const messageEl = document.getElementById('message');
+      if (correct) {
+        clearInterval(timerInterval);
+        messageEl.textContent = '🎉 恭喜完成！';
+        messageEl.style.color = '#10b981';
+        document.getElementById('sudoku-grid').classList.add('success-animation');
+        setTimeout(() => {
+          document.getElementById('sudoku-grid').classList.remove('success-animation');
+        }, 600);
+      } else {
+        messageEl.textContent = '還有錯誤，繼續加油！';
+        messageEl.style.color = '#ef4444';
+        setTimeout(() => {
+          messageEl.textContent = '';
+        }, 2000);
+      }
+    }
+    
+    function giveHint() {
+      const emptyCells = [];
+      for (let i = 0; i < 9; i++) {
+        for (let j = 0; j < 9; j++) {
+          if (currentPuzzle[i][j] === 0 && userGrid[i][j] === 0) {
+            emptyCells.push([i, j]);
+          }
+        }
+      }
+      
+      if (emptyCells.length === 0) return;
+      
+      const [row, col] = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+      userGrid[row][col] = solution[row][col];
+      renderGrid();
+      
+      const messageEl = document.getElementById('message');
+      messageEl.textContent = '💡 已填入一個提示';
+      messageEl.style.color = '#f59e0b';
+      setTimeout(() => {
+        messageEl.textContent = '';
+      }, 2000);
+    }
+    
+    document.addEventListener('keydown', (e) => {
+      if (!selectedCell) return;
+      
+      const num = parseInt(e.key);
+      if (num >= 1 && num <= 9) {
+        const { row, col, element } = selectedCell;
+        userGrid[row][col] = num;
+        element.textContent = num;
+        element.style.color = '#3b82f6';
+        
+        if (num !== solution[row][col]) {
+          mistakes++;
+          document.getElementById('mistakes').textContent = mistakes;
+          element.classList.add('error');
+          setTimeout(() => element.classList.remove('error'), 300);
+        }
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        const { row, col, element } = selectedCell;
+        userGrid[row][col] = 0;
+        element.textContent = '';
+      }
+    });
+    
+    document.getElementById('new-game-btn').addEventListener('click', startNewGame);
+    document.getElementById('check-btn').addEventListener('click', checkSolution);
+    document.getElementById('hint-btn').addEventListener('click', giveHint);
+    
+    document.getElementById('new-game-btn').addEventListener('mouseenter', function() {
+      this.style.background = '#2563eb';
+    });
+    document.getElementById('new-game-btn').addEventListener('mouseleave', function() {
+      this.style.background = '#3b82f6';
+    });
+    
+    document.getElementById('check-btn').addEventListener('mouseenter', function() {
+      this.style.background = '#059669';
+    });
+    document.getElementById('check-btn').addEventListener('mouseleave', function() {
+      this.style.background = '#10b981';
+    });
+    
+    document.getElementById('hint-btn').addEventListener('mouseenter', function() {
+      this.style.background = '#d97706';
+    });
+    document.getElementById('hint-btn').addEventListener('mouseleave', function() {
+      this.style.background = '#f59e0b';
+    });
+
+    // Element SDK Integration
+    async function onConfigChange(config) {
+      document.getElementById('game-title').textContent = config.game_title || defaultConfig.game_title;
+      document.getElementById('new-game-btn').textContent = config.new_game_button || defaultConfig.new_game_button;
+      document.getElementById('check-btn').textContent = config.check_button || defaultConfig.check_button;
+      document.getElementById('hint-btn').textContent = config.hint_button || defaultConfig.hint_button;
+    }
+
+    function mapToCapabilities(config) {
+      return {
+        recolorables: [],
+        borderables: [],
+        fontEditable: undefined,
+        fontSizeable: undefined
+      };
+    }
+
+    function mapToEditPanelValues(config) {
+      return new Map([
+        ["game_title", config.game_title || defaultConfig.game_title],
+        ["new_game_button", config.new_game_button || defaultConfig.new_game_button],
+        ["check_button", config.check_button || defaultConfig.check_button],
+        ["hint_button", config.hint_button || defaultConfig.hint_button]
+      ]);
+    }
+
+    if (window.elementSdk) {
+      window.elementSdk.init({
+        defaultConfig,
+        onConfigChange,
+        mapToCapabilities,
+        mapToEditPanelValues
+      });
+    }
+    
+    // Start first game
+    startNewGame();
+  </script>
+ <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9aeb00e04583a367',t:'MTc2NTg1NDc5MS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
